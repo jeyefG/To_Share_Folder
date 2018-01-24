@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbel version="1.0"
+      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info"
+>
+  <bookmark href="file:///etc/modules" added="2018-01-06T09:58:26Z" modified="2018-01-06T09:58:51Z" visited="2018-01-06T09:58:27Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="application/octet-stream"/>
+        <bookmark:applications>
+          <bookmark:application name="Leafpad" exec="&apos;leafpad %u&apos;" modified="2018-01-06T09:58:51Z" count="3"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/pi/verano_N0_W0_M0_24" added="2018-01-12T11:25:35Z" modified="2018-01-12T11:25:35Z" visited="2018-01-12T11:25:35Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="application/octet-stream"/>
+        <bookmark:applications>
+          <bookmark:application name="piscope" exec="&apos;piscope %u&apos;" modified="2018-01-12T11:25:35Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/pi/lkj" added="2018-01-12T11:26:02Z" modified="2018-01-12T11:26:02Z" visited="2018-01-12T11:26:02Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="application/octet-stream"/>
+        <bookmark:applications>
+          <bookmark:application name="piscope" exec="&apos;piscope %u&apos;" modified="2018-01-12T11:26:02Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/pi/Videos/verano_N0_W0_M0_24" added="2018-01-12T11:27:11Z" modified="2018-01-12T11:27:11Z" visited="2018-01-12T11:27:12Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="application/octet-stream"/>
+        <bookmark:applications>
+          <bookmark:application name="piscope" exec="&apos;piscope %u&apos;" modified="2018-01-12T11:27:11Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///boot/config.txt" added="2018-01-16T11:50:45Z" modified="2018-01-16T11:50:45Z" visited="2018-01-16T11:50:46Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="text/plain"/>
+        <bookmark:applications>
+          <bookmark:application name="Leafpad" exec="&apos;leafpad %u&apos;" modified="2018-01-16T11:50:45Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+</xbel>

@@ -1,0 +1,8 @@
+BlueJ run started: Wed Jan 17 11:53:34 CST 2018
+BlueJ version 3.1.7b
+Java version 1.8.0_65
+Virtual machine: Java HotSpot(TM) Client VM 25.65-b01 (Oracle Corporation)
+Running on: Linux 4.9.35-v7+ (arm)
+Java Home: /usr/lib/jvm/jdk-8-oracle-arm32-vfp-hflt/jre
+----
+Detected language "english" based on iso639-2 code "eng"

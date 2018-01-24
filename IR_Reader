@@ -1,0 +1,13 @@
+import RPI.GPIO as GPIO
+import math
+import os
+from datetime import datetime
+from time import sleep
+
+PIN = 23
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(PIN, GPIO.IN)
+
+while True:
+    value = 1
+    # Loop until we read a 0
