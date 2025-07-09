@@ -242,7 +242,7 @@ class SesionProcessor:
         df['interseccion_low'] = interseccion_low
         df['interseccion_high'] = interseccion_high
 
-        zona_baja, zona_alta, _ = self.calculator.calcular_zonas_taylor(self.df_d1)
+        #zona_baja, zona_alta, _ = self.calculator.calcular_zonas_taylor(self.df_d1)
         df['zona_baja'] = zona_baja
         df['zona_alta'] = zona_alta
         
