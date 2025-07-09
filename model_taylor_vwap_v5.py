@@ -306,10 +306,6 @@ class ModelTrainer:
         # También puedes excluir otros flags específicos si los tuvieras
         # excluidas += [col for col in self.df.columns if col.startswith('cruce_') or 'rebote_' in col]
     
-        # Permitimos que el target siga en los features (para balance de clase en algunos modelos, aunque no se use como feature)
-        if target in excluidas:
-            excluidas.remove(target)
-    
         features = [col for col in self.df.columns if col not in excluidas]
         return features
     
@@ -351,7 +347,7 @@ class ModelTrainer:
             "operaciones": aciertos + errores
         }
 
-    def evaluar_todos_por_rentabilidad(self, umbrales=[0.5, 0.6, 0.65, 0.7, 0.75, 0.8], ganancia_unitaria=2.5, perdida_unitaria=0.6):
+    def evaluar_todos_por_rentabilidad(self, umbrales=[0.65, 0.7, 0.75, 0.8], ganancia_unitaria=2.5, perdida_unitaria=0.6):
         resultados = []
 
         for etiqueta in self.etiquetas_objetivo:
@@ -509,11 +505,12 @@ def revisar_coincidencias_etiquetas_flags(df, verbose=True):
         print("⚠️ No se generaron coincidencias válidas.")
         return pd.DataFrame(columns=['etiqueta', 'flag', 'total_etiquetas', 'coincidencias', 'porcentaje'])
 
-resumen_coincidencias = revisar_coincidencias_etiquetas_flags(df_concat)
+#resumen_coincidencias = revisar_coincidencias_etiquetas_flags(df_concat)
 
 
 etiquetas = [col for col in df_concat.columns if col.startswith('etiqueta_')]
 trainer = ModelTrainer(df_concat, etiquetas)
+
 trainer.entrenar_todos()
 trainer.simular_rentabilidad('etiqueta_cruce_vwap_buy_low', umbral=0.65)
 trainer.evaluar_todos_por_rentabilidad()
