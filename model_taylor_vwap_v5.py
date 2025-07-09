@@ -174,7 +174,7 @@ class LabelGenerator:
             etiquetas[rebote_label] = 0
 
             # Toque en t-1 → se usa en la vela t para decidir si marcarla
-            toques = df[df[f"toque_{nivel}"] == True].shift(1).dropna()
+            toques = df[df[f"toque_{nivel}"] == True].dropna()
 
             for idx in toques.index:
                 if idx not in df.index:
@@ -427,7 +427,7 @@ if __name__ == "__main__":
         "EURUSD.mg":     (14, 0),
     }
     vwap_win = 14
-    n_dias = 150
+    n_dias = 350
 
     # --- Inicialización de clases ---
     connector = MT5Connector()
@@ -512,5 +512,5 @@ etiquetas = [col for col in df_concat.columns if col.startswith('etiqueta_')]
 trainer = ModelTrainer(df_concat, etiquetas)
 
 trainer.entrenar_todos()
-trainer.simular_rentabilidad('etiqueta_cruce_vwap_buy_low', umbral=0.65)
 trainer.evaluar_todos_por_rentabilidad()
+
