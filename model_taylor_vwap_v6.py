@@ -109,7 +109,7 @@ class TaylorVWAPCalculator:
         return df
     
 class FeatureEnricher:
-    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, ema_periods=[5, 14, 50]):
+    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, ema_periods=[5, 14, 50, 200]):
         self.rsi_period = rsi_period
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
@@ -142,6 +142,8 @@ class FeatureEnricher:
         df['dist_to_vwap'] = abs(df['close'] - df['vwap'])
         df['dist_to_buy_low'] = df['close'] - df['buy_low']
         df['dist_to_sell_high'] = df['sell_high'] - df['close']
+        df['dist_to_buy_high'] = df['close'] - df['buy_high']
+        df['dist_to_sell_low'] = df['sell_low'] - df['close']
 
         # Indicadores técnicos
         df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=self.rsi_period).rsi()
@@ -156,7 +158,80 @@ class FeatureEnricher:
         df['momentum_3'] = df['close'].pct_change(3)
         df['momentum_5'] = df['close'].pct_change(5)
         df['hora_normalizada'] = df.index.hour + df.index.minute / 60
-
+        
+        # Nuevos indicadores experimentales
+        
+        # 1. Velocidad del precio (cambio por unidad de tiempo)
+        #df['velocity'] = df['close'].diff() / df['hora_normalizada'].diff()
+        
+        # 2. Pendiente del VWAP (slope VWAP en últimas 3 velas)
+        #df['vwap_slope_3'] = df['vwap'].diff(3) / 3
+        
+        # 4. Tendencia reciente del VWAP (promedio móvil del slope)
+        df['vwap_slope_ema'] = df['vwap'].diff().ewm(span=5).mean()
+        
+        # 5. Señales tipo price action
+        """
+        df['candle_range'] = df['high'] - df['low']
+        df['upper_wick'] = df['high'] - df[['close', 'open']].max(axis=1)
+        df['lower_wick'] = df[['close', 'open']].min(axis=1) - df['low']
+        df['is_pinbar'] = ((df['lower_wick'] > df['candle_range'] * 0.6) & (df['upper_wick'] < df['candle_range'] * 0.2))
+        
+        # Cast booleanos a int para modelos
+        df['is_pinbar'] = df['is_pinbar'].astype(int)
+        
+        df['bullish_engulfing'] = (
+        (df['close'].shift(1) < df['open'].shift(1)) &  # vela roja previa
+        (df['open'] < df['close'].shift(1)) &           # abre más abajo que cierre previo
+        (df['close'] > df['open'].shift(1))             # cierra más arriba que apertura previa
+        ).astype(int)
+        
+        df['bearish_engulfing'] = (
+        (df['close'].shift(1) > df['open'].shift(1)) &  # vela verde previa
+        (df['open'] > df['close'].shift(1)) &           # abre más arriba que cierre previo
+        (df['close'] < df['open'].shift(1))             # cierra más abajo que apertura previa
+        ).astype(int)
+        
+        df['morning_star'] = (
+        (df['close'].shift(2) < df['open'].shift(2)) &  # vela 1 bajista
+        (abs(df['close'].shift(1) - df['open'].shift(1)) < (df['high'].shift(1) - df['low'].shift(1)) * 0.3) &  # vela 2 cuerpo pequeño
+        (df['close'] > df['open']) &  # vela 3 alcista
+        (df['close'] > (df['open'].shift(2) + df['close'].shift(2)) / 2)  # cierra más allá del 50% de la vela 1
+        ).astype(int)
+        
+        df['evening_star'] = (
+        (df['close'].shift(2) > df['open'].shift(2)) &  # vela 1 alcista
+        (abs(df['close'].shift(1) - df['open'].shift(1)) < (df['high'].shift(1) - df['low'].shift(1)) * 0.3) &  # vela 2 indecisión
+        (df['close'] < df['open']) &  # vela 3 bajista
+        (df['close'] < (df['open'].shift(2) + df['close'].shift(2)) / 2)  # cierra por debajo del 50% de la vela 1
+        ).astype(int)
+        
+        df['three_black_crows'] = (
+        (df['close'].shift(2) < df['open'].shift(2)) &
+        (df['close'].shift(1) < df['open'].shift(1)) &
+        (df['close'] < df['open']) &
+        (df['open'].shift(1) < df['open'].shift(2)) &
+        (df['open'] < df['open'].shift(1)) &
+        (df['close'] < df['close'].shift(1))
+        ).astype(int)
+        
+        df['three_white_soldiers'] = (
+        (df['close'].shift(2) > df['open'].shift(2)) &
+        (df['close'].shift(1) > df['open'].shift(1)) &
+        (df['close'] > df['open']) &
+        (df['open'].shift(1) > df['open'].shift(2)) &
+        (df['open'] > df['open'].shift(1)) &
+        (df['close'] > df['close'].shift(1))
+        ).astype(int)
+        """
+        
+        # EMA del RSI
+        df['rsi_ema'] = df['rsi'].ewm(span=5).mean()
+        df['rsi_vs_ema'] = df['rsi'] - df['rsi_ema']
+        df['rsi_slope'] = df['rsi'].diff()
+        
+        
+        
         return df
     
 class LabelGenerator:
@@ -446,8 +521,11 @@ class ModelTrainer:
     
                 model = LGBMClassifier(random_state=42, class_weight='balanced', verbose=-1)
                 model.fit(X_train, y_train)
-                y_pred = model.predict(X_test)
+                #y_pred = model.predict(X_test)
+                #y_prob = model.predict_proba(X_test)[:, 1]
                 y_prob = model.predict_proba(X_test)[:, 1]
+                umbral = 0.8
+                y_pred = (y_prob >= umbral).astype(int)
     
                 if verbose:
                     print(classification_report(y_test, y_pred))
@@ -627,12 +705,31 @@ etiquetas = [col for col in df_concat.columns if col.startswith('etiqueta_')]
 trainer = ModelTrainer(df_concat, etiquetas)
 
 # Entrenamiento global sin imprimir detalles
-trainer.entrenar_todos(verbose=False, plot=False)
+#trainer.entrenar_todos(verbose=False, plot=False)
 #trainer.evaluar_todos_por_rentabilidad()
 
 # Entrenamiento por símbolo y resumen compacto
 trainer.entrenar_por_symbol(verbose=False, plot=False)
 df_resumen = trainer.resumen_resultados(top_n=5)
-print("\n=== Resumen por símbolo ===")
-print(df_resumen.to_string(index=False))
 
+# Ordenar por tp, f1 y precision de mayor a menor
+df_resumen = df_resumen.sort_values(by=['tp', 'f1', 'precision'], ascending=False).reset_index(drop=True)
+
+# Definir expected_gain por símbolo
+expected_gain_dict = {
+    'XAUUSD.mg': 7000,
+    'EURUSD.mg': 2000,
+    'US500.spot.mg': 240,
+    'USDCLP.mg': 2500
+}
+
+# Asignar expected gain por fila
+df_resumen['expected_gain'] = df_resumen['symbol'].map(expected_gain_dict)
+
+# Calcular ganancias y pérdidas esperadas
+df_resumen['ganancia_tp'] = df_resumen['tp'] * df_resumen['expected_gain']
+df_resumen['perdida_fp'] = -df_resumen['fp'] * df_resumen['expected_gain']
+df_resumen['resultado_estimado'] = df_resumen['ganancia_tp'] + df_resumen['perdida_fp']
+#print("\n=== Resumen por símbolo ===")
+#print(df_resumen.to_string(index=False))
+df_resumen.to_csv("resultados_nf.csv", index=False, sep=';', decimal=',')
