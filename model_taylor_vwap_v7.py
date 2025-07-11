@@ -245,7 +245,7 @@ class FeatureEnricher:
             elif direction == 'resistance':
                 base |= close > (nivel + umbral)
             return base.astype(int)
-        
+
         niveles_vec = {
             'buy_low': 'support',
             'buy_high': 'support',
@@ -256,13 +256,13 @@ class FeatureEnricher:
             'ema_50': None,
             'ema_200': None,
         }
-        
+
         for nivel, direction in niveles_vec.items():
             df[f'vecindad_{nivel}'] = _vecindad(df['close'], df[nivel], df['sigma'], direction)
             df[f'vecindad_persist_{nivel}'] = (
                 df[f'vecindad_{nivel}'].rolling(5, min_periods=1).sum() >= 3
             ).astype(int)
-        
+
         df['vecindad_acumulada'] = df[[f'vecindad_{n}' for n in niveles_vec]].sum(axis=1)
         
         
@@ -711,7 +711,7 @@ def revisar_coincidencias_etiquetas_flags(df, verbose=True):
             if verbose:
                 print(f"❌ Tipo de etiqueta desconocido o no relevante: {etiqueta}")
             continue
-        
+
         flag_toque = f'vecindad_{nivel}'
         
         if flag_toque not in df.columns:
