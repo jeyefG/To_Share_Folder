@@ -330,7 +330,8 @@ class SesionProcessor:
         if df.empty:
             return None
 
-        zona_baja, zona_alta, ancho_zona = self.calculator.calcular_zonas_taylor(self.df_d1)
+        zona_baja, zona_alta, _ = self.calculator.calcular_zonas_taylor(self.df_d1)
+        ancho_zona = abs(zona_alta - zona_baja)
         df = self.calculator.calcular_vwap(df)
         df_premarket = df[df.index < self.apertura_mq]
         if df_premarket.empty:
@@ -344,6 +345,9 @@ class SesionProcessor:
         sell_low = sell_high - ancho_zona
         interseccion_low = max(buy_low, sell_low)
         interseccion_high = min(buy_high, sell_high)
+        
+        if not (buy_low < buy_high < sell_low < sell_high):
+            buy_low, buy_high, sell_low, sell_high = sorted([buy_low, buy_high, sell_low, sell_high])
 
         df['symbol'] = self.symbol
         df['fecha'] = self.fecha_sesion.date()
@@ -392,7 +396,7 @@ class DatasetBuilder:
 
         df_enriquecido = self.enricher.enriquecer(df_base)
         
-        niveles = ['buy_low', 'buy_high', 'sell_high', 'sell_low', 'vwap_lo', 'vwap_hi']
+        niveles = ['buy_low', 'buy_high', 'sell_low', 'sell_high', 'vwap_lo', 'vwap_hi']
         etiquetas = self.label_generator.generar_etiquetas_cruce_y_rebote(df_enriquecido, niveles)
         df_final = pd.concat([df_enriquecido, etiquetas], axis=1)
         
@@ -756,7 +760,11 @@ def plot_vecindad(df, niveles):
     if 'ema_200' in df:
         plt.plot(df.index, df['ema_200'], label='ema_200', color='red')
 
+    skip_levels = {'vwap_hi', 'vwap_lo', 'ema_50', 'ema_200'}
+    
     for nivel in niveles:
+        if nivel in skip_levels:
+            continue
         if nivel in df.columns:
             plt.plot(df.index, df[nivel], linestyle=':', label=nivel)
             mask = df.get(f'vecindad_{nivel}', pd.Series(False, index=df.index)).astype(bool)
