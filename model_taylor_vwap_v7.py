@@ -235,10 +235,40 @@ class FeatureEnricher:
         atr = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14, fillna=False)
         df['atr_14'] = atr.average_true_range()
         
+        # --- Vecindades respecto a niveles críticos ---
+
+        def _vecindad(close, nivel, sigma, direction=None):
+            umbral = 0.2 * sigma
+            base = (close - nivel).abs() <= umbral
+            if direction == 'support':
+                base |= close < (nivel - umbral)
+            elif direction == 'resistance':
+                base |= close > (nivel + umbral)
+            return base.astype(int)
+        
+        niveles_vec = {
+            'buy_low': 'support',
+            'buy_high': 'support',
+            'sell_low': 'resistance',
+            'sell_high': 'resistance',
+            'vwap_lo': 'support',
+            'vwap_hi': 'resistance',
+            'ema_50': None,
+            'ema_200': None,
+        }
+        
+        for nivel, direction in niveles_vec.items():
+            df[f'vecindad_{nivel}'] = _vecindad(df['close'], df[nivel], df['sigma'], direction)
+            df[f'vecindad_persist_{nivel}'] = (
+                df[f'vecindad_{nivel}'].rolling(5, min_periods=1).sum() >= 3
+            ).astype(int)
+        
+        df['vecindad_acumulada'] = df[[f'vecindad_{n}' for n in niveles_vec]].sum(axis=1)
+        
         
         
         return df
-    
+
 class LabelGenerator:
     def __init__(self, n_ahead=24, umbral_rebote=0.9):
         self.n_ahead = n_ahead
@@ -248,15 +278,14 @@ class LabelGenerator:
         etiquetas = pd.DataFrame(index=df.index)
 
         for nivel in niveles:
-            cruce_label = f"etiqueta_cruce_vwap_{nivel}"
             rebote_label = f"etiqueta_rebote_vwap_{nivel}"
-            etiquetas[cruce_label] = 0
+            escape_label = f"etiqueta_escape_tendencia_{nivel}"
             etiquetas[rebote_label] = 0
+            etiquetas[escape_label] = 0
 
-            # Toque en t-1 → se usa en la vela t para decidir si marcarla
-            toques = df[df[f"toque_{nivel}"] == True].dropna()
+            vecs = df[df[f"vecindad_{nivel}"] == 1]
 
-            for idx in toques.index:
+            for idx in vecs.index:
                 if idx not in df.index:
                     continue
                 actual_idx = df.index.get_loc(idx)
@@ -264,20 +293,23 @@ class LabelGenerator:
                     continue
 
                 sub_df = df.iloc[actual_idx + 1 : actual_idx + 1 + self.n_ahead]
-                close_inicial = df.loc[idx, 'close']
-                vwap_inicial = df.loc[idx, 'vwap']
-                dist_a_vwap = abs(vwap_inicial - close_inicial)
+                close_ini = df.loc[idx, 'close']
+                vwap_ini = df.loc[idx, 'vwap']
+                dist_vwap = abs(vwap_ini - close_ini)
 
-                if 'buy' in nivel or 'lo' in nivel:
-                    if (sub_df['close'] > sub_df['vwap']).any():
-                        etiquetas.at[idx, cruce_label] = 1
-                    elif (sub_df['close'].max() - close_inicial) >= self.umbral_rebote * dist_a_vwap:
-                        etiquetas.at[idx, rebote_label] = 1
+                if (sub_df['close'] - sub_df['vwap']).abs().min() == 0 or (
+                    (sub_df['close'] > sub_df['vwap']).any() and close_ini < vwap_ini
+                ) or (
+                    (sub_df['close'] < sub_df['vwap']).any() and close_ini > vwap_ini
+                ):
+                    etiquetas.at[idx, rebote_label] = 1
                 else:
-                    if (sub_df['close'] < sub_df['vwap']).any():
-                        etiquetas.at[idx, cruce_label] = 1
-                    elif (close_inicial - sub_df['close'].min()) >= self.umbral_rebote * dist_a_vwap:
-                        etiquetas.at[idx, rebote_label] = 1
+                    if close_ini > vwap_ini:
+                        movimiento = sub_df['close'].max() - close_ini
+                    else:
+                        movimiento = close_ini - sub_df['close'].min()
+                    if movimiento >= self.umbral_rebote * dist_vwap:
+                        etiquetas.at[idx, escape_label] = 1
 
         return etiquetas
 
@@ -385,6 +417,11 @@ class ModelTrainer:
     
         # Evitar leakage por flags (aunque se calculen en t-1)
         excluidas += [col for col in self.df.columns if col.startswith('toque_')]
+
+        # Excluir vecindad puntual para evitar leakage (mantener persistencia y acumulada)
+        for col in self.df.columns:
+            if col.startswith('vecindad_') and not col.startswith('vecindad_persist') and col != 'vecindad_acumulada':
+                excluidas.append(col)
     
         # También puedes excluir otros flags específicos si los tuvieras
         # excluidas += [col for col in self.df.columns if col.startswith('cruce_') or 'rebote_' in col]
@@ -666,16 +703,17 @@ def revisar_coincidencias_etiquetas_flags(df, verbose=True):
     resumen = []
 
     for etiqueta in etiquetas:
-        if 'cruce_vwap_' in etiqueta:
-            nivel = etiqueta.replace('etiqueta_cruce_vwap_', '')
-        elif 'rebote_vwap_' in etiqueta:
+        if 'rebote_vwap_' in etiqueta:
             nivel = etiqueta.replace('etiqueta_rebote_vwap_', '')
+        elif 'escape_tendencia_' in etiqueta:
+            nivel = etiqueta.replace('etiqueta_escape_tendencia_', '')
         else:
             if verbose:
                 print(f"❌ Tipo de etiqueta desconocido o no relevante: {etiqueta}")
             continue
-
-        flag_toque = f'toque_{nivel}'
+        
+        flag_toque = f'vecindad_{nivel}'
+        
         if flag_toque not in df.columns:
             if verbose:
                 print(f"⚠️ Flag no encontrado para {etiqueta}: {flag_toque}")
@@ -702,6 +740,31 @@ def revisar_coincidencias_etiquetas_flags(df, verbose=True):
     else:
         print("⚠️ No se generaron coincidencias válidas.")
         return pd.DataFrame(columns=['etiqueta', 'flag', 'total_etiquetas', 'coincidencias', 'porcentaje'])
+
+
+def plot_vecindad(df, niveles):
+    """Grafica precios y marca las velas con vecindad en los niveles dados."""
+    plt.figure(figsize=(12, 6))
+    plt.plot(df.index, df['close'], label='close', color='black')
+    plt.plot(df.index, df['vwap'], label='vwap', color='blue')
+    if 'vwap_hi' in df:
+        plt.plot(df.index, df['vwap_hi'], '--', label='vwap_hi', color='orange')
+    if 'vwap_lo' in df:
+        plt.plot(df.index, df['vwap_lo'], '--', label='vwap_lo', color='orange')
+    if 'ema_50' in df:
+        plt.plot(df.index, df['ema_50'], label='ema_50', color='green')
+    if 'ema_200' in df:
+        plt.plot(df.index, df['ema_200'], label='ema_200', color='red')
+
+    for nivel in niveles:
+        if nivel in df.columns:
+            plt.plot(df.index, df[nivel], linestyle=':', label=nivel)
+            mask = df.get(f'vecindad_{nivel}', pd.Series(False, index=df.index)).astype(bool)
+            plt.scatter(df.index[mask], df['close'][mask], s=20, label=f'vec_{nivel}')
+
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 #resumen_coincidencias = revisar_coincidencias_etiquetas_flags(df_concat)
 
@@ -739,6 +802,21 @@ df_resumen['resultado_estimado'] = df_resumen['ganancia_tp'] + df_resumen['perdi
 #print(df_resumen.to_string(index=False))
 df_resumen.to_csv("resultados_nf.csv", index=False, sep=';', decimal=',')
 
+
+# --- Visualización para inspección de vecindades activadas ---
+
+# Seleccionamos un símbolo de interés (puedes cambiarlo manualmente si quieres otro)
+symbol_viz = 'XAUUSD.mg'  # Cambia por cualquier símbolo disponible en tu dataset
+df_viz = df_concat[df_concat['symbol'] == symbol_viz].copy()
+
+# Definimos los niveles que nos interesa visualizar
+niveles_vecindad = ['buy_low', 'buy_high', 'sell_low', 'sell_high',
+                    'vwap_lo', 'vwap_hi', 'ema_50', 'ema_200']
+
+# Mostrar últimas 300 velas para mayor claridad
+print(f"\n🔍 Visualización de vecindades para: {symbol_viz}")
+plot_vecindad(df_viz.tail(300), niveles_vecindad)
+
 # --- Predicciones para la última vela ---
 resultados_prediccion = []
 
@@ -768,5 +846,6 @@ for etiqueta in etiquetas:
 # Mostrar predicciones ordenadas por mayor probabilidad
 df_preds = pd.DataFrame(resultados_prediccion).sort_values(by="probabilidad", ascending=False)
 df_preds = df_preds[df_preds['probabilidad'] > 0.1]
+    
 print("\n📊 Predicciones para la última vela:")
 print(df_preds.to_string(index=False))
