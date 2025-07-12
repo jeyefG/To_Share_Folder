@@ -241,9 +241,9 @@ class FeatureEnricher:
 
         def _vecindad(close, nivel, sigma, ancho_zona=None, es_taylor=False, direction=None):
             if es_taylor:
-                umbral = 0.05 * ancho_zona
+                umbral = 0.1 * ancho_zona
             else:
-                umbral = 0.1 * sigma
+                umbral = 0.2 * sigma
         
             base = (close - nivel).abs() <= umbral
         
@@ -305,7 +305,13 @@ class LabelGenerator:
                 sub_df = df.iloc[actual_idx + 1 : actual_idx + 1 + self.n_ahead]
                 close_ini = df.loc[idx, 'close']
                 vwap_ini = df.loc[idx, 'vwap']
-                dist_vwap = abs(vwap_ini - close_ini)
+                distancia_vwap = abs(vwap_ini - close_ini)
+
+                # Tendencia de corto plazo
+                if 'ema_50' in df.columns and 'ema_200' in df.columns:
+                    tendencia_alcista = df.loc[idx, 'ema_50'] > df.loc[idx, 'ema_200']
+                else:
+                    tendencia_alcista = df.loc[idx, 'vwap_slope_ema'] > 0
 
                 if (sub_df['close'] - sub_df['vwap']).abs().min() == 0 or (
                     (sub_df['close'] > sub_df['vwap']).any() and close_ini < vwap_ini
@@ -315,10 +321,16 @@ class LabelGenerator:
                     etiquetas.at[idx, rebote_label] = 1
                 else:
                     if close_ini > vwap_ini:
-                        movimiento = sub_df['close'].max() - close_ini
+                        avance = sub_df['close'].max() - close_ini
+                        movimiento_alcista = True
                     else:
-                        movimiento = close_ini - sub_df['close'].min()
-                    if movimiento >= self.umbral_rebote * dist_vwap:
+                        avance = close_ini - sub_df['close'].min()
+                        movimiento_alcista = False
+
+                    if avance >= self.umbral_rebote * distancia_vwap and (
+                        (movimiento_alcista and tendencia_alcista)
+                        or (not movimiento_alcista and not tendencia_alcista)
+                    ):
                         etiquetas.at[idx, escape_label] = 1
 
         return etiquetas
@@ -819,18 +831,18 @@ df_resumen.to_csv("resultados_nf.csv", index=False, sep=';', decimal=',')
 
 
 # --- Visualización para inspección de vecindades activadas ---
-
-# Seleccionamos un símbolo de interés (puedes cambiarlo manualmente si quieres otro)
-symbol_viz = 'XAUUSD.mg'  # Cambia por cualquier símbolo disponible en tu dataset
-df_viz = df_concat[df_concat['symbol'] == symbol_viz].copy()
-
-# Definimos los niveles que nos interesa visualizar
-niveles_vecindad = ['buy_low', 'buy_high', 'sell_low', 'sell_high',
-                    'vwap_lo', 'vwap_hi', 'ema_50', 'ema_200']
-
-# Mostrar últimas 300 velas para mayor claridad
-print(f"\n🔍 Visualización de vecindades para: {symbol_viz}")
-plot_vecindad(df_viz.tail(800), niveles_vecindad)
+for symbol in df_concat['symbol'].unique():
+    # Seleccionamos un símbolo de interés (puedes cambiarlo manualmente si quieres otro)
+    symbol_viz = symbol  # Cambia por cualquier símbolo disponible en tu dataset
+    df_viz = df_concat[df_concat['symbol'] == symbol_viz].copy()
+    
+    # Definimos los niveles que nos interesa visualizar
+    niveles_vecindad = ['buy_low', 'buy_high', 'sell_low', 'sell_high',
+                        'vwap_lo', 'vwap_hi', 'ema_50', 'ema_200']
+    
+    # Mostrar últimas 300 velas para mayor claridad
+    print(f"\n🔍 Visualización de vecindades para: {symbol_viz}")
+    plot_vecindad(df_viz.tail(300), niveles_vecindad)
 
 # --- Predicciones para la última vela ---
 resultados_prediccion = []
