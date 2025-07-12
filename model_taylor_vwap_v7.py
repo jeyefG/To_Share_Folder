@@ -236,35 +236,45 @@ class FeatureEnricher:
         df['atr_14'] = atr.average_true_range()
         
         # --- Vecindades respecto a niveles críticos ---
+        
+        ancho_zona = abs(df['zona_alta'].iloc[0] - df['zona_baja'].iloc[0])
 
-        def _vecindad(close, nivel, sigma, direction=None):
-            umbral = 0.2 * sigma
+        def _vecindad(close, nivel, sigma, ancho_zona=None, es_taylor=False, direction=None):
+            if es_taylor:
+                umbral = 0.05 * ancho_zona
+            else:
+                umbral = 0.1 * sigma
+        
             base = (close - nivel).abs() <= umbral
+        
             if direction == 'support':
                 base |= close < (nivel - umbral)
             elif direction == 'resistance':
                 base |= close > (nivel + umbral)
+        
             return base.astype(int)
 
         niveles_vec = {
-            'buy_low': 'support',
-            'buy_high': 'support',
-            'sell_low': 'resistance',
-            'sell_high': 'resistance',
-            'vwap_lo': 'support',
-            'vwap_hi': 'resistance',
-            'ema_50': None,
-            'ema_200': None,
+            'buy_low': ('support', True),         # extremo inferior: sí aplica dirección
+            'buy_high': (None, True),             # zona intermedia: sin dirección
+            'sell_low': (None, True),             # zona intermedia: sin dirección
+            'sell_high': ('resistance', True),    # extremo superior: sí aplica dirección
+            'vwap_lo': ('support', False),
+            'vwap_hi': ('resistance', False),
+            'ema_50': (None, False),
+            'ema_200': (None, False),
         }
 
-        for nivel, direction in niveles_vec.items():
-            df[f'vecindad_{nivel}'] = _vecindad(df['close'], df[nivel], df['sigma'], direction)
+        for nivel, (direction, es_taylor) in niveles_vec.items():
+            ancho = ancho_zona if es_taylor else None
+            df[f'vecindad_{nivel}'] = _vecindad(
+                df['close'], df[nivel], df['sigma'], ancho, es_taylor, direction
+            )
             df[f'vecindad_persist_{nivel}'] = (
                 df[f'vecindad_{nivel}'].rolling(5, min_periods=1).sum() >= 3
             ).astype(int)
 
         df['vecindad_acumulada'] = df[[f'vecindad_{n}' for n in niveles_vec]].sum(axis=1)
-        
         
         
         return df
@@ -339,15 +349,13 @@ class SesionProcessor:
 
         precio_min = df_premarket['low'].min()
         precio_max = df_premarket['high'].max()
-        buy_low = precio_min
-        buy_high = buy_low + ancho_zona
-        sell_high = precio_max
-        sell_low = sell_high - ancho_zona
+        buy_high = precio_min 
+        sell_high = buy_high + ancho_zona 
+        sell_low = precio_max 
+        buy_low = sell_low - ancho_zona
         interseccion_low = max(buy_low, sell_low)
         interseccion_high = min(buy_high, sell_high)
         
-        if not (buy_low < buy_high < sell_low < sell_high):
-            buy_low, buy_high, sell_low, sell_high = sorted([buy_low, buy_high, sell_low, sell_high])
 
         df['symbol'] = self.symbol
         df['fecha'] = self.fecha_sesion.date()
@@ -760,13 +768,12 @@ def plot_vecindad(df, niveles):
     if 'ema_200' in df:
         plt.plot(df.index, df['ema_200'], label='ema_200', color='red')
 
-    skip_levels = {'vwap_hi', 'vwap_lo', 'ema_50', 'ema_200'}
-    
+    base_levels = {'vwap_hi', 'vwap_lo', 'ema_50', 'ema_200'}
+
     for nivel in niveles:
-        if nivel in skip_levels:
-            continue
         if nivel in df.columns:
-            plt.plot(df.index, df[nivel], linestyle=':', label=nivel)
+            if nivel not in base_levels:
+                plt.plot(df.index, df[nivel], linestyle=':', label=nivel)
             mask = df.get(f'vecindad_{nivel}', pd.Series(False, index=df.index)).astype(bool)
             plt.scatter(df.index[mask], df['close'][mask], s=20, label=f'vec_{nivel}')
 
@@ -823,7 +830,7 @@ niveles_vecindad = ['buy_low', 'buy_high', 'sell_low', 'sell_high',
 
 # Mostrar últimas 300 velas para mayor claridad
 print(f"\n🔍 Visualización de vecindades para: {symbol_viz}")
-plot_vecindad(df_viz.tail(300), niveles_vecindad)
+plot_vecindad(df_viz.tail(800), niveles_vecindad)
 
 # --- Predicciones para la última vela ---
 resultados_prediccion = []
