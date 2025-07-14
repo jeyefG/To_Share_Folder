@@ -199,7 +199,7 @@ class FeatureEnricher:
         df['rsi_slope'] = df['rsi'].diff()
         
         # ATR
-        atr = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14, fillna=False)
+        atr = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=(min(len(df),14)), fillna=False)
         df['atr_14'] = atr.average_true_range()
                 
         # --- Vecindades respecto a niveles críticos ---
@@ -847,6 +847,7 @@ for etiqueta in etiquetas:
             "symbol": symbol,
             "etiqueta": etiqueta,
             "probabilidad": round(prob, 4),
+            "distancia": abs(df_sym['vwap'].iloc[-1] - df_sym['close'].iloc[-1])
         })
 
 # Mostrar predicciones ordenadas por mayor probabilidad
