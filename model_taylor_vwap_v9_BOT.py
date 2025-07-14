@@ -329,10 +329,10 @@ class SesionProcessor:
 
         precio_min = df_premarket['low'].min()
         precio_max = df_premarket['high'].max()
-        buy_high = precio_min 
-        sell_high = buy_high + ancho_zona 
-        sell_low = precio_max 
-        buy_low = sell_low - ancho_zona
+        buy_low = precio_min
+        buy_high = buy_low + ancho_zona
+        sell_high = precio_max
+        sell_low = sell_high - ancho_zona
         interseccion_low = max(buy_low, sell_low)
         interseccion_high = min(buy_high, sell_high)
         
@@ -859,6 +859,6 @@ try:
         else:
             print("\nSin datos para predicción")
 
-        time.sleep(600)
+        time.sleep(300)
 except KeyboardInterrupt:
     print("Loop de predicción finalizado")
