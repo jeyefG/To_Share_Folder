@@ -36,19 +36,22 @@ class MT5Connector:
     def shutdown(self):
         mt5.shutdown()
 
-    def obtener_d1(self, symbol, fecha_sesion, n=10, max_busqueda=20):
-        dias_d1 = []
-        for offset in range(1, max_busqueda + 1):
-            fecha = fecha_sesion - timedelta(days=offset)
-            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_D1, fecha, fecha + timedelta(days=1))
-            if rates is not None and len(rates) > 0:
-                dias_d1.append({field: rates[0][field] for field in rates.dtype.names})
-            if len(dias_d1) == n:
-                break
-        df = pd.DataFrame(dias_d1) if len(dias_d1) == n else None
-        if df is not None:
-            df['time'] = pd.to_datetime(df['time'], unit='s')
-            df.set_index('time', inplace=True)
+    def obtener_d1(self, symbol, fecha_sesion, n=20):
+        """Obtiene `n` velas diarias previas a ``fecha_sesion``.
+
+        Esta lógica replica la empleada en ``Taylor_zone_V5_Max_min_VWAP.py``:
+        se piden las últimas ``n`` velas D1 y se descarta la vela del día en
+        curso si está presente.
+        """
+        rates_d1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, n)
+        if rates_d1 is None or len(rates_d1) < 4:
+            return None
+
+        df = pd.DataFrame(rates_d1)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+
+        df = df[df.index < fecha_sesion]
         return df
 
     def obtener_m5(self, symbol, fecha_sesion):
@@ -320,7 +323,7 @@ class SesionProcessor:
             return None
 
         zona_baja, zona_alta, _ = self.calculator.calcular_zonas_taylor(self.df_d1)
-        ancho_zona = abs(zona_alta - zona_baja)
+        ancho_zona = zona_alta - zona_baja
         df = self.calculator.calcular_vwap(df)
         df_premarket = df[df.index < self.apertura_mq]
         if df_premarket.empty:
@@ -328,10 +331,10 @@ class SesionProcessor:
 
         precio_min = df_premarket['low'].min()
         precio_max = df_premarket['high'].max()
-        buy_high = precio_min 
-        sell_high = buy_high + ancho_zona 
-        sell_low = precio_max 
-        buy_low = sell_low - ancho_zona
+        buy_low = precio_min
+        buy_high = buy_low + ancho_zona
+        sell_high = precio_max
+        sell_low = sell_high - ancho_zona
         interseccion_low = max(buy_low, sell_low)
         interseccion_high = min(buy_high, sell_high)
         
