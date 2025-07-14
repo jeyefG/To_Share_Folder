@@ -37,19 +37,24 @@ class MT5Connector:
     def shutdown(self):
         mt5.shutdown()
 
-    def obtener_d1(self, symbol, fecha_sesion, n=10, max_busqueda=20):
-        dias_d1 = []
-        for offset in range(1, max_busqueda + 1):
-            fecha = fecha_sesion - timedelta(days=offset)
-            rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_D1, fecha, fecha + timedelta(days=1))
-            if rates is not None and len(rates) > 0:
-                dias_d1.append({field: rates[0][field] for field in rates.dtype.names})
-            if len(dias_d1) == n:
-                break
-        df = pd.DataFrame(dias_d1) if len(dias_d1) == n else None
-        if df is not None:
-            df['time'] = pd.to_datetime(df['time'], unit='s')
-            df.set_index('time', inplace=True)
+    def obtener_d1(self, symbol, fecha_sesion, num_dias, n=10):
+        """Obtiene `n` velas diarias previas a ``fecha_sesion``.
+
+        Esta lógica replica la empleada en ``Taylor_zone_V5_Max_min_VWAP.py``:
+        se piden las últimas ``n`` velas D1 y se descarta la vela del día en
+        curso si está presente.
+        """
+        rates_d1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, num_dias, n)
+        if rates_d1 is None:
+            return None
+
+        df = pd.DataFrame(rates_d1)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+
+        df = df[df.index < fecha_sesion]
+        if len(df) < 4:
+            return None  # Esto previene el error más arriba
         return df
 
     def obtener_m5(self, symbol, fecha_sesion):
@@ -248,6 +253,27 @@ class FeatureEnricher:
         return df
 
 class LabelGenerator:
+    """Genera etiquetas de rebote o escape tras tocar un nivel.
+
+    Se crean dos etiquetas por nivel evaluado:
+    
+    ``etiqueta_rebote_vwap_*``
+        El precio toca el nivel y dentro de ``n_ahead`` velas alcanza o cruza
+        la VWAP, indicando un regreso a la zona de equilibrio.
+    
+    ``etiqueta_escape_tendencia_*``
+        Tras tocar el nivel, el precio se aleja de la VWAP continuando la
+        tendencia de corto plazo. La dirección de la tendencia se infiere a
+        partir del carácter de soporte o resistencia del nivel junto con la
+        pendiente de corto plazo (EMA o VWAP).
+    
+    Parameters
+    ----------
+    n_ahead : int
+        Número máximo de velas para verificar el comportamiento posterior.
+    umbral_rebote : float
+        Múltiplo mínimo de la distancia a la VWAP para considerar un escape.
+    """
     def __init__(self, n_ahead=24, umbral_rebote=0.8):
         self.n_ahead = n_ahead
         self.umbral_rebote = umbral_rebote
@@ -321,7 +347,7 @@ class SesionProcessor:
             return None
 
         zona_baja, zona_alta, _ = self.calculator.calcular_zonas_taylor(self.df_d1)
-        ancho_zona = abs(zona_alta - zona_baja)
+        ancho_zona = zona_alta - zona_baja
         df = self.calculator.calcular_vwap(df)
         df_premarket = df[df.index < self.apertura_mq]
         if df_premarket.empty:
@@ -361,8 +387,8 @@ class DatasetBuilder:
         self.enricher = enricher
         self.label_generator = label_generator
 
-    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq):
-        df_d1 = self.connector.obtener_d1(symbol, fecha_sesion)
+    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq, num_dias):
+        df_d1 = self.connector.obtener_d1(symbol, fecha_sesion, num_dias)
         if df_d1 is None:
             print(f"[{symbol} - {fecha_sesion}] ❌ df_d1 no disponible")
             return None
@@ -686,7 +712,7 @@ if __name__ == "__main__":
             fecha_sesion = fecha_base - timedelta(days=i)
             apertura_mq = fecha_sesion.replace(hour=premarket_closes[symbol][0], minute=premarket_closes[symbol][1])
 
-            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq)
+            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq, i)
 
             if df is not None:
                 df_total.append(df)
@@ -813,16 +839,18 @@ df_resumen.to_csv("resultados_nf.csv", index=False, sep=';', decimal=',')
 #print("\n=== Resumen por símbolo ===")
 #print(df_resumen.to_string(index=False))
 
-print("\nIniciando loop de predicción cada 10 minutos...")
+print("\nIniciando loop de predicción cada 5 minutos...")
 
 try:
     while True:
+        
+        plt.close('all')
         resultados_prediccion = []
         fecha_sesion = (datetime.now() + timedelta(hours=6)).replace(hour=0, minute=0, second=0, microsecond=0)
 
         for symbol in symbols:
             apertura_mq = fecha_sesion.replace(hour=premarket_closes[symbol][0], minute=premarket_closes[symbol][1])
-            df_live = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq)
+            df_live = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq, 0)
 
             if df_live is None or df_live.empty:
                 continue
@@ -844,7 +872,8 @@ try:
                 resultados_prediccion.append({
                     'symbol': symbol,
                     'etiqueta': etiqueta,
-                    'probabilidad': round(prob, 4)
+                    'probabilidad': round(prob, 4),
+                    "distancia": abs(df_live['vwap'].iloc[-1] - df_live['close'].iloc[-1])
                 })
 
                 # TODO: enviar orden a MetaTrader5 según la probabilidad
@@ -852,10 +881,12 @@ try:
                 #     mt5.order_send(...)
 
         if resultados_prediccion:
+            
             df_preds = pd.DataFrame(resultados_prediccion).sort_values(by='probabilidad', ascending=False)
-            df_preds = df_preds[df_preds['probabilidad'] > 0.8]
+            #df_preds = df_preds[df_preds['probabilidad'] > 0.7]
             print("\n📊 Predicciones en vivo:")
-            print(df_preds.to_string(index=False))
+            print(f"Hora: {datetime.now()}") 
+            print(df_preds[df_preds['probabilidad'] > 0.7].to_string(index=False))
         else:
             print("\nSin datos para predicción")
 
