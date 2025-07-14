@@ -27,6 +27,15 @@ from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Configuración centralizada de símbolos
+SYMBOL_CONFIGS = {
+    "US500.spot.mg": {"premarket": (15, 30), "expected_gain": 240, "min_dist": 4},
+    "USDCLP.mg": {"premarket": (15, 30), "expected_gain": 2500, "min_dist": 1.5},
+    "XAUUSD.mg": {"premarket": (5, 0), "expected_gain": 7000, "min_dist": 3},
+    "EURUSD.mg": {"premarket": (14, 0), "expected_gain": 2000, "min_dist": 0.001},
+}
+
+
 
 class MT5Connector:
     def __init__(self):
@@ -36,15 +45,15 @@ class MT5Connector:
     def shutdown(self):
         mt5.shutdown()
 
-    def obtener_d1(self, symbol, fecha_sesion, n=20):
+    def obtener_d1(self, symbol, fecha_sesion, num_dias, n=10):
         """Obtiene `n` velas diarias previas a ``fecha_sesion``.
 
         Esta lógica replica la empleada en ``Taylor_zone_V5_Max_min_VWAP.py``:
         se piden las últimas ``n`` velas D1 y se descarta la vela del día en
         curso si está presente.
         """
-        rates_d1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, n)
-        if rates_d1 is None or len(rates_d1) < 4:
+        rates_d1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, num_dias, n)
+        if rates_d1 is None:
             return None
 
         df = pd.DataFrame(rates_d1)
@@ -52,6 +61,8 @@ class MT5Connector:
         df.set_index('time', inplace=True)
 
         df = df[df.index < fecha_sesion]
+        if len(df) < 4:
+            return None  # Esto previene el error más arriba
         return df
 
     def obtener_m5(self, symbol, fecha_sesion):
@@ -211,7 +222,7 @@ class FeatureEnricher:
 
         def _vecindad(close, nivel, sigma, ancho_zona=None, es_taylor=False, direction=None):
             if es_taylor:
-                umbral = 0.15 * ancho_zona
+                umbral = 0.17 * ancho_zona
             else:
                 umbral = 0.2 * sigma
         
@@ -254,7 +265,7 @@ class LabelGenerator:
         self.n_ahead = n_ahead
         self.umbral_rebote = umbral_rebote
 
-    def generar_etiquetas_cruce_y_rebote(self, df, niveles):
+    def generar_etiquetas_cruce_y_rebote(self, df, niveles, min_dist=0):
         etiquetas = pd.DataFrame(index=df.index)
 
         for nivel in niveles:
@@ -276,6 +287,8 @@ class LabelGenerator:
                 close_ini = df.loc[idx, 'close']
                 vwap_ini = df.loc[idx, 'vwap']
                 distancia_vwap = abs(vwap_ini - close_ini)
+                if distancia_vwap < min_dist:
+                    continue
 
                 # Tendencia de corto plazo
                 if 'ema_50' in df.columns and 'ema_200' in df.columns:
@@ -363,8 +376,8 @@ class DatasetBuilder:
         self.enricher = enricher
         self.label_generator = label_generator
 
-    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq):
-        df_d1 = self.connector.obtener_d1(symbol, fecha_sesion)
+    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq, num_dias, min_dist=0):
+        df_d1 = self.connector.obtener_d1(symbol, fecha_sesion, num_dias)
         if df_d1 is None:
             print(f"[{symbol} - {fecha_sesion}] ❌ df_d1 no disponible")
             return None
@@ -387,7 +400,7 @@ class DatasetBuilder:
         df_enriquecido = self.enricher.enriquecer(df_base)
         
         niveles = ['buy_low', 'buy_high', 'sell_low', 'sell_high', 'vwap_lo', 'vwap_hi']
-        etiquetas = self.label_generator.generar_etiquetas_cruce_y_rebote(df_enriquecido, niveles)
+        etiquetas = self.label_generator.generar_etiquetas_cruce_y_rebote(df_enriquecido, niveles, min_dist)
         df_final = pd.concat([df_enriquecido, etiquetas], axis=1)
         
         return df_final
@@ -660,13 +673,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     # --- Configuraciones ---
-    symbols = ["US500.spot.mg", "USDCLP.mg", "XAUUSD.mg", "EURUSD.mg"]
-    premarket_closes = {
-        "US500.spot.mg": (15, 30),
-        "USDCLP.mg":     (15, 30),
-        "XAUUSD.mg":     (5, 0),
-        "EURUSD.mg":     (14, 0),
-    }
+    symbols = list(SYMBOL_CONFIGS.keys())
     vwap_win = 14
     n_dias = 350
 
@@ -682,13 +689,14 @@ if __name__ == "__main__":
 
     for symbol in symbols:
         print(f"Procesando: {symbol}")
-        horas, minutos = premarket_closes[symbol]
-
         for i in tqdm(range(n_dias), desc=f"{symbol}"):
             fecha_sesion = fecha_base - timedelta(days=i)
-            apertura_mq = fecha_sesion.replace(hour=premarket_closes[symbol][0], minute=premarket_closes[symbol][1])
+            apertura_mq = fecha_sesion.replace(
+                hour=SYMBOL_CONFIGS[symbol]["premarket"][0],
+                minute=SYMBOL_CONFIGS[symbol]["premarket"][1]
+            )
 
-            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq)
+            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq, i, SYMBOL_CONFIGS[symbol]["min_dist"])
 
             if df is not None:
                 df_total.append(df)
@@ -792,16 +800,10 @@ df_resumen = trainer.resumen_resultados(top_n=5)
 # Ordenar por tp, f1 y precision de mayor a menor
 df_resumen = df_resumen.sort_values(by=['tp', 'f1', 'precision'], ascending=False).reset_index(drop=True)
 
-# Definir expected_gain por símbolo
-expected_gain_dict = {
-    'XAUUSD.mg': 7000,
-    'EURUSD.mg': 2000,
-    'US500.spot.mg': 240,
-    'USDCLP.mg': 2500
-}
-
-# Asignar expected gain por fila
-df_resumen['expected_gain'] = df_resumen['symbol'].map(expected_gain_dict)
+# Asignar expected gain por fila desde la configuración
+df_resumen['expected_gain'] = df_resumen['symbol'].map(
+    {k: v['expected_gain'] for k, v in SYMBOL_CONFIGS.items()}
+)
 
 # Calcular ganancias y pérdidas esperadas
 df_resumen['ganancia_tp'] = df_resumen['tp'] * df_resumen['expected_gain']
@@ -824,7 +826,10 @@ for symbol in df_concat['symbol'].unique():
     
     # Mostrar últimas 300 velas para mayor claridad
     #print(f"\n🔍 Visualización de vecindades para: {symbol_viz}")
-    #plot_vecindad(df_viz.tail(300), niveles_vecindad)
+    fecha_base_dt = datetime.combine(fecha_base, datetime.min.time())
+    df_viz['fecha'] = pd.to_datetime(df_viz['fecha'], errors='coerce')
+    df_viz = df_viz[df_viz['fecha'] >= fecha_base_dt]
+    plot_vecindad(df_viz, niveles_vecindad)
 
 # --- Predicciones para la última vela ---
 resultados_prediccion = []
