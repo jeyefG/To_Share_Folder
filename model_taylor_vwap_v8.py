@@ -26,13 +26,14 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 # Configuración centralizada de símbolos
 SYMBOL_CONFIGS = {
     "US500.spot.mg": {"premarket": (15, 30), "expected_gain": 240, "min_dist": 4},
     "USDCLP.mg": {"premarket": (15, 30), "expected_gain": 2500, "min_dist": 1.5},
-    "XAUUSD.mg": {"premarket": (5, 0), "expected_gain": 7000, "min_dist": 3},
-    "EURUSD.mg": {"premarket": (14, 0), "expected_gain": 2000, "min_dist": 0.001},
+    "XAUUSD.mg": {"premarket": (5, 0), "expected_gain": 7000, "min_dist": 2},
+    "EURUSD.mg": {"premarket": (14, 0), "expected_gain": 2000, "min_dist": 0.0005},
 }
 
 
@@ -124,14 +125,28 @@ class TaylorVWAPCalculator:
         return df
     
 class FeatureEnricher:
-    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, ema_periods=[5, 14, 50, 200]):
+    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, ema_periods=[5, 20, 50, 200]):
         self.rsi_period = rsi_period
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
         self.ema_periods = ema_periods
+        
+    def enriquecer_intradia(self, df):
+        """
+        Arega features que son sólo de contexto diario
+        
+        Parameters
+        ----------
+        df : TYPE
+            DESCRIPTION.
 
-    def enriquecer(self, df):
+        Returns
+        -------
+        None.
+        
+        """
+        
         df = df.copy()
 
         # Triggers de toque en t-1
@@ -159,19 +174,7 @@ class FeatureEnricher:
         df['dist_to_sell_high'] = df['sell_high'] - df['close']
         df['dist_to_buy_high'] = df['close'] - df['buy_high']
         df['dist_to_sell_low'] = df['sell_low'] - df['close']
-
-        # Indicadores técnicos
-        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=self.rsi_period).rsi()
-        macd = ta.trend.MACD(df['close'], window_slow=self.macd_slow, window_fast=self.macd_fast, window_sign=self.macd_signal)
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_diff'] = macd.macd_diff()
-        for p in self.ema_periods:
-            df[f'ema_{p}'] = df['close'].ewm(span=p, adjust=False).mean()
-
-        df['vol_surge'] = df['tick_volume'] / df['tick_volume'].rolling(14).mean()
-        df['momentum_3'] = df['close'].pct_change(3)
-        df['momentum_5'] = df['close'].pct_change(5)
+        
         df['hora_normalizada'] = df.index.hour + df.index.minute / 60
         
         # Nuevos indicadores experimentales
@@ -180,7 +183,9 @@ class FeatureEnricher:
         df['velocity'] = df['close'].diff() / df['hora_normalizada'].diff()
         
         # 2. Pendiente del VWAP (slope VWAP en últimas 3 velas)
-        #df['vwap_slope_3'] = df['vwap'].diff(3) / 3
+        df['dist_vwap_sigma'] = df['dist_to_vwap'] / df['sigma']
+        df['dist_vwap_atr'] = df['dist_to_vwap'] / df['atr_14']
+        df['dist_buy_low_atr'] = df['dist_to_buy_low'] / df['atr_14']
         
         # 4. Tendencia reciente del VWAP (promedio móvil del slope)
         #df['vwap_slope_ema'] = df['vwap'].diff().ewm(span=5).mean()
@@ -207,14 +212,6 @@ class FeatureEnricher:
         df['lower_low'] = (df['low'] < df['low'].shift(1)).astype(int)
         """
         
-        # EMA del RSI
-        df['rsi_ema'] = df['rsi'].ewm(span=5).mean()
-        df['rsi_vs_ema'] = df['rsi'] - df['rsi_ema']
-        df['rsi_slope'] = df['rsi'].diff()
-        
-        # ATR
-        atr = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=(min(len(df),14)), fillna=False)
-        df['atr_14'] = atr.average_true_range()
                 
         # --- Vecindades respecto a niveles críticos ---
         
@@ -236,14 +233,12 @@ class FeatureEnricher:
             return base.astype(int)
 
         niveles_vec = {
-            'buy_low': ('support', True),         # extremo inferior: sí aplica dirección
-            'buy_high': (None, True),             # zona intermedia: sin dirección
-            'sell_low': (None, True),             # zona intermedia: sin dirección
-            'sell_high': ('resistance', True),    # extremo superior: sí aplica dirección
+            'buy_low': ('support', True),
+            'buy_high': (None, True),
+            'sell_low': (None, True),
+            'sell_high': ('resistance', True),
             'vwap_lo': ('support', False),
             'vwap_hi': ('resistance', False),
-            'ema_50': (None, False),
-            'ema_200': (None, False),
         }
 
         for nivel, (direction, es_taylor) in niveles_vec.items():
@@ -257,8 +252,73 @@ class FeatureEnricher:
 
         df['vecindad_acumulada'] = df[[f'vecindad_{n}' for n in niveles_vec]].sum(axis=1)
         
-        
         return df
+
+    def enriquecer_historico(self, df):
+        """Calcula indicadores que requieren la serie completa por símbolo."""
+        df_list = []
+        for symbol, data in df.groupby('symbol'):
+            data = data.sort_index().copy()
+            
+            # RSI
+            data['rsi'] = ta.momentum.RSIIndicator(data['close'], window=self.rsi_period).rsi()
+            data['rsi_ema'] = data['rsi'].ewm(span=5).mean()
+            data['rsi_vs_ema'] = data['rsi'] - df['rsi_ema']
+            data['rsi_slope'] = data['rsi'].diff()
+            
+            # MACD
+            macd = ta.trend.MACD(data['close'], window_slow=self.macd_slow, window_fast=self.macd_fast, window_sign=self.macd_signal)
+            data['macd'] = macd.macd()
+            data['macd_signal'] = macd.macd_signal()
+            data['macd_diff'] = macd.macd_diff()
+            
+            # ATR
+            atr = AverageTrueRange(high=data['high'], low=data['low'], close=data['close'], window=14, fillna=False)
+            data['atr_14'] = atr.average_true_range()
+            for p in self.ema_periods:
+                data[f'ema_{p}'] = data['close'].ewm(span=p, adjust=False).mean()
+        
+            def _vec(close, nivel, sigma):
+                umbral = 0.2 * sigma
+                return ((close - nivel).abs() <= umbral).astype(int)
+        
+            # EMAS
+            for p in self.ema_periods:
+                col = f'ema_{p}'
+                if col in data:
+                    data[f'vecindad_{col}'] = _vec(data['close'], data[col], data['sigma'])
+                    data[f'vecindad_persist_{col}'] = (
+                        data[f'vecindad_{col}'].rolling(5, min_periods=1).sum() >= 3
+                    ).astype(int)
+                    
+                    # Flag 1/0: ¿precio > SMA?
+                    data[f'above_ema_{p}'] = (data['close'] > data[f'ema_{p}']).astype(int)
+
+                    # Distancia normalizada (en ATR para hacerla comparable)
+                    # Evita división por cero con .replace
+                    data[f'dist_to_ema_{p}'] = (data['close'] - data[f'ema_{p}'])
+                    
+            # Score acumulado de tendencia: cuántas MAs tengo a favor
+            data['sma_trend_score'] = data[[f'above_ema_{p}' for p in self.ema_periods]].sum(axis=1)
+            
+            data['ema5_vs_ema20'] = data['ema_5'] - data['ema_20']
+            data['ema5_cross_ema20'] = (data['ema_5'] > data['ema_20']).astype(int)
+            
+            data['ema20_vs_ema50'] = data['ema_20'] - data['ema_50']
+            data['ema20_cross_ema50'] = (data['ema_20'] > data['ema_50']).astype(int)
+            
+            data['ema50_vs_ema200'] = data['ema_50'] - data['ema_200']
+            data['ema50_cross_ema200'] = (data['ema_50'] > data['ema_200']).astype(int)
+            
+            df['vol_surge'] = df['tick_volume'] / df['tick_volume'].rolling(14).mean()
+            df['momentum_3'] = df['close'].pct_change(3)
+            df['momentum_5'] = df['close'].pct_change(5)
+        
+            vec_cols = [c for c in data.columns if c.startswith('vecindad_') and not c.startswith('vecindad_persist')]
+            data['vecindad_acumulada'] = data[vec_cols].sum(axis=1)
+            df_list.append(data)
+
+        return pd.concat(df_list).sort_index()        
 
 class LabelGenerator:
     def __init__(self, n_ahead=24, umbral_rebote=0.8):
@@ -321,14 +381,13 @@ class LabelGenerator:
 calculator = TaylorVWAPCalculator(vwap_win=14)
 
 class SesionProcessor:
-    def __init__(self, symbol, fecha_sesion, apertura_mq, df_d1, rates_m5, calculator, label_generator):
+    def __init__(self, symbol, fecha_sesion, apertura_mq, df_d1, rates_m5, calculator):
         self.symbol = symbol
         self.fecha_sesion = fecha_sesion
         self.apertura_mq = apertura_mq
         self.df_d1 = df_d1
         self.rates_m5 = rates_m5
         self.calculator = calculator
-        self.label_generator = label_generator
 
     def procesar(self):
         df = self.rates_m5.copy()
@@ -370,13 +429,12 @@ class SesionProcessor:
         return df
     
 class DatasetBuilder:
-    def __init__(self, connector, calculator, enricher, label_generator):
+    def __init__(self, connector, calculator, enricher):
         self.connector = connector
         self.calculator = calculator
         self.enricher = enricher
-        self.label_generator = label_generator
 
-    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq, num_dias, min_dist=0):
+    def procesar_sesion(self, symbol, fecha_sesion, apertura_mq, num_dias):
         df_d1 = self.connector.obtener_d1(symbol, fecha_sesion, num_dias)
         if df_d1 is None:
             print(f"[{symbol} - {fecha_sesion}] ❌ df_d1 no disponible")
@@ -390,20 +448,16 @@ class DatasetBuilder:
         procesador = SesionProcessor(
             symbol, fecha_sesion, apertura_mq,
             df_d1, rates_m5,
-            self.calculator, self.label_generator
+            self.calculator
         )
 
         df_base = procesador.procesar()
         if df_base is None:
             return None
 
-        df_enriquecido = self.enricher.enriquecer(df_base)
-        
-        niveles = ['buy_low', 'buy_high', 'sell_low', 'sell_high', 'vwap_lo', 'vwap_hi']
-        etiquetas = self.label_generator.generar_etiquetas_cruce_y_rebote(df_enriquecido, niveles, min_dist)
-        df_final = pd.concat([df_enriquecido, etiquetas], axis=1)
-        
-        return df_final
+        df_enriquecido = self.enricher.enriquecer_intradia(df_base)
+
+        return df_enriquecido
 
 class ModelTrainer:
     def __init__(self, df, etiquetas_objetivo, excluir_columnas=[]):
@@ -682,7 +736,7 @@ if __name__ == "__main__":
     calculator = TaylorVWAPCalculator(vwap_win=vwap_win)
     enricher = FeatureEnricher()
     label_generator = LabelGenerator()
-    builder = DatasetBuilder(connector, calculator, enricher, label_generator)
+    builder = DatasetBuilder(connector, calculator, enricher)
 
     fecha_base = (datetime.now() + timedelta(hours=6)).replace(hour=0, minute=0, second=0, microsecond=0)
     df_total = []
@@ -696,7 +750,7 @@ if __name__ == "__main__":
                 minute=SYMBOL_CONFIGS[symbol]["premarket"][1]
             )
 
-            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq, i, SYMBOL_CONFIGS[symbol]["min_dist"])
+            df = builder.procesar_sesion(symbol, fecha_sesion, apertura_mq, i)
 
             if df is not None:
                 df_total.append(df)
@@ -707,6 +761,17 @@ if __name__ == "__main__":
         bool_cols = df_concat.select_dtypes(include='bool').columns
         df_concat[bool_cols] = df_concat[bool_cols].astype(int)
         df_concat.sort_values(by=['symbol', 'fecha', 'time'], ascending=[True, True, True], inplace=True)
+        df_concat = enricher.enriquecer_historico(df_concat)
+
+        niveles = ['buy_low', 'buy_high', 'sell_low', 'sell_high', 'vwap_lo', 'vwap_hi']
+        df_labeled = []
+        for sym, data in df_concat.groupby('symbol'):
+            etiquetas = label_generator.generar_etiquetas_cruce_y_rebote(
+                data, niveles, SYMBOL_CONFIGS[sym]['min_dist']
+            )
+            df_labeled.append(pd.concat([data, etiquetas], axis=1))
+        
+        df_concat = pd.concat(df_labeled).sort_index()
         #df_concat.to_csv("v5.csv", index=True, sep=';', decimal=',')
         #print("✅ Dataset guardado como 'v5.csv'")
     else:
