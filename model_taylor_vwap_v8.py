@@ -262,9 +262,9 @@ class FeatureEnricher:
             
             # RSI
             data['rsi'] = ta.momentum.RSIIndicator(data['close'], window=self.rsi_period).rsi()
-            data['rsi_ema'] = data['rsi'].ewm(span=5).mean()
-            data['rsi_vs_ema'] = data['rsi'] - df['rsi_ema']
-            data['rsi_slope'] = data['rsi'].diff()
+            data['rsi_ema'] = data['rsi'].ewm(span=5, adjust=False).mean()
+            data['rsi_vs_ema'] = data['rsi'].fillna(0) - data['rsi_ema'].fillna(0)
+            data['rsi_slope'] = data['rsi'].diff().fillna(0)
             
             # MACD
             macd = ta.trend.MACD(data['close'], window_slow=self.macd_slow, window_fast=self.macd_fast, window_sign=self.macd_signal)
@@ -455,10 +455,8 @@ class DatasetBuilder:
         if df_base is None:
             return None
 
-        df_enriquecido = self.enricher.enriquecer_intradia(df_base)
-
-        return df_enriquecido
-
+        return df_base
+    
 class ModelTrainer:
     def __init__(self, df, etiquetas_objetivo, excluir_columnas=[]):
         self.df = df.copy()
@@ -758,10 +756,18 @@ if __name__ == "__main__":
     if df_total:
         df_concat = pd.concat(df_total)
         df_concat = df_concat[df_concat['tick_volume'] > 0]
+        
+        # Primero calcular indicadores históricos que dependen de la serie completa
+        df_concat = enricher.enriquecer_historico(df_concat)
+
+        # Luego calcular los features intradía que pueden usar los históricos
+        df_concat = enricher.enriquecer_intradia(df_concat)
+
+        # Convertir columnas booleanas a enteros después de añadir todas las features
         bool_cols = df_concat.select_dtypes(include='bool').columns
         df_concat[bool_cols] = df_concat[bool_cols].astype(int)
+        
         df_concat.sort_values(by=['symbol', 'fecha', 'time'], ascending=[True, True, True], inplace=True)
-        df_concat = enricher.enriquecer_historico(df_concat)
 
         niveles = ['buy_low', 'buy_high', 'sell_low', 'sell_high', 'vwap_lo', 'vwap_hi']
         df_labeled = []
